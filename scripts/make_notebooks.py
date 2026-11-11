@@ -44,17 +44,38 @@ BASE_SETUP = [
     code("""
 !nvidia-smi --query-gpu=name,memory.total --format=csv
 """),
-    md("## Google Drive (cache and results) and project code from GitHub"),
+    md("""
+## Storage and project code from GitHub
+
+Works on **Colab** and **Kaggle**:
+* Colab: everything is kept in Google Drive, `MyDrive/Colab Notebooks/agricl-net`.
+* Kaggle: turn on *Settings > Accelerator > GPU T4* and *Settings > Internet*. Results go to
+  `/kaggle/working/agricl-net` and are kept when you *Save Version*. Downloads go to `/tmp` (fetched again each
+  session). To use an earlier notebook's results (or resume a run), attach that notebook's output with
+  *Add Input > Notebook Output*: it is copied in automatically below.
+"""),
     code(f"""
-import os, sys
-from google.colab import drive
-drive.mount('/content/drive')
-
-DRIVE = '/content/drive/MyDrive/AGRI-NET'   # dataset zip, SAM2 checkpoint and all results are kept here
-CACHE = f'{{DRIVE}}/cache'
+import os, sys, glob, shutil
+ON_KAGGLE = os.path.exists('/kaggle/working')
+if ON_KAGGLE:
+    WORK = '/tmp'                               # scratch space: code, unzipped data
+    DRIVE = '/kaggle/working/agricl-net'        # results, saved with each notebook version
+    CACHE = '/tmp/agricl-cache'                 # dataset zip and SAM2 checkpoint
+    for src in glob.glob('/kaggle/input/**/agricl-net/runs/*', recursive=True):
+        dst = f'{{DRIVE}}/runs/{{os.path.basename(src)}}'
+        if os.path.isdir(src) and not os.path.exists(dst):
+            shutil.copytree(src, dst)
+            print('copied earlier results:', os.path.basename(src))
+else:
+    from google.colab import drive
+    drive.mount('/content/drive')
+    WORK = '/content'
+    DRIVE = '/content/drive/MyDrive/Colab Notebooks/agricl-net'   # dataset zip, SAM2 checkpoint and all results
+    CACHE = f'{{DRIVE}}/cache'
 os.makedirs(CACHE, exist_ok=True)
+os.makedirs(f'{{DRIVE}}/runs', exist_ok=True)
 
-CODE = '/content/AGRICL-NET'
+CODE = f'{{WORK}}/AGRICL-NET'
 if os.path.exists(CODE):
     !git -C {{CODE}} pull -q
 else:
@@ -62,7 +83,7 @@ else:
 sys.path.insert(0, CODE)
 !git -C {{CODE}} log -1 --format='code version: %h %s'
 """),
-    md("## PlantSeg v7 dataset (1.1 GB, downloaded to Drive once)"),
+    md("## PlantSeg v7 dataset (1.1 GB; on Colab downloaded to Drive once)"),
     code("""
 import hashlib
 ZIP = f'{CACHE}/plantseg.zip'
@@ -75,16 +96,16 @@ with open(ZIP, 'rb') as f:
         h.update(chunk)
 assert h.hexdigest() == '9358a66dff88cdd15c4fe009763c40a3', f'bad download, md5 {h.hexdigest()}: delete {ZIP} and rerun'
 
-if not os.path.exists('/content/data/plantseg/Metadata.csv'):
-    !unzip -q "{ZIP}" -d /content/data
-DATA = '/content/data/plantseg'
+DATA = f'{WORK}/data/plantseg'
+if not os.path.exists(f'{DATA}/Metadata.csv'):
+    !unzip -q "{ZIP}" -d "{WORK}/data"
 """),
 ]
 SAM2_SETUP = [
     md("## SAM2-UNet code and SAM2 checkpoint"),
     code(f"""
 !pip -q install hydra-core==1.3.2
-SAM2UNET = '/content/SAM2-UNet'
+SAM2UNET = f'{{WORK}}/SAM2-UNet'
 if not os.path.exists(SAM2UNET):
     !git clone -q https://github.com/WZH0120/SAM2-UNet.git {{SAM2UNET}}
     !git -C {{SAM2UNET}} checkout -q {SAM2UNET_COMMIT}
@@ -193,7 +214,7 @@ plt.tight_layout(); plt.show()
     md("""
 ## Next
 * Smoke test passed? Set `SMOKE_TEST = False` in the settings cell and run all cells.
-* Results: `MyDrive/AGRI-NET/runs/<run name>/` (`best.pt`, `history.json`, `results.json`, per-image CSVs).
+* Results: `MyDrive/Colab Notebooks/agricl-net/runs/<run name>/` (`best.pt`, `history.json`, `results.json`, per-image CSVs).
 * If one epoch takes too long for a Colab session, try `SIZE = 'b+'` or `'s'` and compare the scores.
 * When the full run is done, open `02_leaf_and_severity.ipynb`.
 """),
@@ -219,7 +240,7 @@ PDSNets dataset: a later step.)
     code("""
 SIZE = 'l'            # must match the lesion run from notebook 01
 IMG_SIZE = 352        # must match the lesion run from notebook 01
-LESION_RUN = f"lesion_sam2unet_{SIZE.replace('+', 'p')}_{IMG_SIZE}"   # folder in MyDrive/AGRI-NET/runs
+LESION_RUN = f"lesion_sam2unet_{SIZE.replace('+', 'p')}_{IMG_SIZE}"   # folder in MyDrive/Colab Notebooks/agricl-net/runs
 N_PER_GROUP = 150     # images per group (seen / unseen); None = all
 USE_SAM2_LEAF = True  # False: colour-index (ExG) leaf mask, the offline fallback
 """),
@@ -386,7 +407,7 @@ for r in rows[:10]:
     md("""
 ## Next
 * Smoke test passed? Set `SMOKE_TEST = False` in the settings cell and run all cells.
-* Results: `MyDrive/AGRI-NET/runs/<run name>/` (`best.pt`, `classes.json`, `calibration.json`, `results.json`,
+* Results: `MyDrive/Colab Notebooks/agricl-net/runs/<run name>/` (`best.pt`, `classes.json`, `calibration.json`, `results.json`,
   `per_class.csv`, `logits.npz`).
 * The continual-learning step will compare against this model's accuracy as the upper bound.
 """),
@@ -430,7 +451,7 @@ SMOKE_TEST = True    # True: 3 images per disease, 1 epoch per round. Set False 
 !pip -q install timm
 RUN = 'continual_' + MODEL.split('.')[0] + ('_smoke' if SMOKE_TEST else '')
 OUT = f'{DRIVE}/runs/{RUN}'
-IMG_CACHE = '/content/plantseg_640'   # resized copies on local disk: much faster than decoding full photos
+IMG_CACHE = f'{WORK}/plantseg_640'   # resized copies on local disk: much faster than decoding full photos
 print('results ->', OUT)
 """),
     md("## Run all rounds for all three methods (resumes automatically)"),
@@ -496,7 +517,7 @@ plt.tight_layout(); plt.show()
     md("""
 ## Next
 * Smoke test passed? Set `SMOKE_TEST = False` and run all cells.
-* Results: `MyDrive/AGRI-NET/runs/<run name>/` (`results.json`, `rounds.json`, final model of each method).
+* Results: `MyDrive/Colab Notebooks/agricl-net/runs/<run name>/` (`results.json`, `rounds.json`, final model of each method).
 * For the report: `replay_kd` should keep accuracy closer to the joint upper bound and forget less than
   `finetune` and `replay`.
 """),
@@ -507,7 +528,7 @@ write("05_app_bundle.ipynb", [
     md("""
 # AgriCL-Net, step 5: package the trained models for the app
 
-Collects everything the Streamlit app needs into one folder, `MyDrive/AGRI-NET/app_bundle`, tests it on
+Collects everything the Streamlit app needs into one folder, `MyDrive/Colab Notebooks/agricl-net/app_bundle`, tests it on
 a few photos (on GPU, and on CPU to show the speed on a laptop) and zips it for download.
 
 **Needs:** a finished run of notebook 01 (lesion model), plus notebook 03 (joint classifier) or
@@ -572,10 +593,13 @@ import time, random
 from PIL import Image
 from agricl.predictor import AgriCLPredictor
 
-if not os.path.exists('/content/data/plantseg/Metadata.csv'):
-    !unzip -q "{CACHE}/plantseg.zip" -d /content/data
+DATA = f'{WORK}/data/plantseg'
+if not os.path.exists(f'{DATA}/Metadata.csv'):
+    if not os.path.exists(f'{CACHE}/plantseg.zip'):
+        !wget -q --show-progress -O "{CACHE}/plantseg.zip" "https://zenodo.org/records/17719108/files/plantseg.zip?download=1"
+    !unzip -q "{CACHE}/plantseg.zip" -d "{WORK}/data"
 from agricl.data.plantseg import load_records, split_seen_unseen
-seen, unseen = split_seen_unseen(load_records('/content/data/plantseg'))
+seen, unseen = split_seen_unseen(load_records(DATA))
 samples = random.Random(0).sample(unseen, 2) + random.Random(0).sample([r for r in seen if r.split == 'test'], 2)
 
 for device in ('cuda', 'cpu'):
@@ -595,7 +619,7 @@ print(f"{DRIVE}/agricl_app_bundle.zip", os.path.getsize(f'{DRIVE}/agricl_app_bun
 """),
     md("""
 ## Next
-Download `MyDrive/AGRI-NET/agricl_app_bundle.zip`, unzip it to `AGRI-NET/models/bundle/` on your computer and
+Download `MyDrive/Colab Notebooks/agricl-net/agricl_app_bundle.zip`, unzip it to `AGRI-NET/models/bundle/` on your computer and
 start the app (see the README, section "Run the app"). The CPU times above are roughly what a laptop will need
 per photo; choose the colour-index leaf method in the app's sidebar to make it faster.
 """),
@@ -637,7 +661,7 @@ import json, shutil
 RUN = f'edge_{TEACHER}' + ('_smoke' if SMOKE_TEST else '')
 OUT = f'{DRIVE}/runs/{RUN}'
 os.makedirs(OUT, exist_ok=True)
-IMG_CACHE = '/content/plantseg_640'
+IMG_CACHE = f'{WORK}/plantseg_640'
 short = MODEL.split('.')[0]
 
 lesion_teacher = f"{DRIVE}/runs/lesion_sam2unet_{SIZE.replace('+', 'p')}_{IMG_SIZE}/best.pt"
@@ -760,8 +784,8 @@ write("07_results_report.ipynb", [
     md("""
 # AgriCL-Net, step 7: results report
 
-Collects the results of every finished run in `MyDrive/AGRI-NET/runs` (smoke tests excluded) into
-`MyDrive/AGRI-NET/report/`:
+Collects the results of every finished run in `MyDrive/Colab Notebooks/agricl-net/runs` (smoke tests excluded) into
+`MyDrive/Colab Notebooks/agricl-net/report/`:
 
 * `report.md`: all results as tables, ready to copy into the documentation;
 * `key_claim.png`: seen vs. unseen diseases (the project's main claim);
