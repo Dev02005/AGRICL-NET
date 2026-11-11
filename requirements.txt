@@ -1,0 +1,5 @@
+# Local (CPU) work: data checks, severity, app, ONNX inference.
+# Training runs on Colab/Kaggle GPUs; see notebooks/.
+numpy
+pillow
+pytest

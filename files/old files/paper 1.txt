@@ -1,0 +1,11 @@
+Paper 1: PlantKD-CLNet (Edge Continual Learning)
+1. Title: Knowledge Distillation-Driven Continual Learning for Lightweight Plant Disease Detection on Edge Devices  
+2. Abstract: Deploying deep learning models on IoT and edge devices for plant disease diagnosis is hindered by computational constraints and the risk of catastrophic forgetting when adapting to new diseases. This study proposes PlantKD-CLNet, a framework combining knowledge distillation with replay-based incremental learning. It achieves 97.0% classification accuracy while compressing the model size from ~60 MB to 3.7 MB and reducing latency from 12.3 ms to 4.3 ms.  
+3. Dataset: Tomato_10 dataset (10 different tomato disease classes; 10,001 train, 912 validation, 33 test images resized to 224 \times 224 evaluated via 5-fold cross-validation).  
+4. Algorithms:
+MobileNetV2 (Teacher and Student backbones)  
+Soft-logit & feature-map Knowledge Distillation (KD)  
+Herding exemplar selection for replay buffer sampling  
+Dual-Loss / Multi-objective optimization (Cross-Entropy + KL Divergence)  
+5. Methodology: Uses a four-phase incremental pipeline. A MobileNetV2 teacher is first trained on base classes and distills knowledge to a compact student. As new disease batches arrive, an adaptive memory replay buffer stores class exemplars closest to the feature mean. The student is jointly optimized on new task labels, replayed historical labels, and soft targets to prevent catastrophic forgetting. Finally, quantization is applied for edge deployment on Raspberry Pi 4 and Jetson Nano.  
+6. Future Scope: Extending the architecture to multi-crop detection, integrating additional environmental sensor streams, incorporating federated learning, and enhancing model explainability.

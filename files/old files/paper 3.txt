@@ -1,0 +1,11 @@
+Paper 3: PDSNets (Field Segmentation & Severity Estimation)
+1. Title: Plant Disease Segmentation Networks for Fast Automatic Severity Estimation Under Natural Field Scenarios  
+2. Abstract: Disease severity assessment in natural field conditions is often hindered by heavy models and manual bias. This study introduces PDSNets, a family of lightweight semantic segmentation networks (\times1.0, \times0.75, \times0.5) based on LinkNet and ResNet-18. The PDSNetx0.5 variant contains only 2.90 M parameters, achieves an F1-score of 91.96%, an IoU of 85.85%, and a severity estimation R^2 of 0.908, while processing 34.18 FPS on a local CPU (2.66\times faster than standard LinkNet).  
+3. Dataset: Custom multi-disease field scenario dataset (240 high-resolution images total; 80 images each for Soybean Bacterial Blight [SBB], Wheat Stripe Rust [WSR], and Cedar Apple Rust [CAR] annotated with pixel-level 3-color labels: Background, Healthy Leaf, Disease Spots).  
+4. Algorithms:
+LinkNet architecture with ResNet-18 encoder  
+4\times4 Convolutional embedding layer with GELU activation  
+Channel-scaled lightweight decoders/encoders  
+Weighted Cross-Entropy Loss (WCE-Loss)  
+5. Methodology: Raw field images are downsampled to 640 \times 640 and annotated at the pixel level (using LAB-A thresholding, MGRVI index, and manual polygon tools). The network replaces standard initial layers with a 4 \times 4 stride-4 embedding layer for speed and applies GELU activations to preserve feature fidelity. Channel scaling (\times0.5) aggressively compresses parameters. Segmented outputs directly compute quantitative disease severity: \text{Severity} = \frac{\text{Spots}}{\text{Spots} + \text{Healthy Leaf}} \times 100\%.  
+6. Future Scope: Incorporating attention mechanisms and knowledge distillation to recover minor accuracy trade-offs, expanding dataset scale and multi-leaf field diversity, and deploying directly to mobile devices.

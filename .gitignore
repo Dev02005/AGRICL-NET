@@ -1,0 +1,18 @@
+# datasets and model weights are large: never commit them
+/data/
+checkpoints/
+*.pt
+*.pth
+*.onnx
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# notebooks
+.ipynb_checkpoints/
+
+# graphify output
+graphify-out/
