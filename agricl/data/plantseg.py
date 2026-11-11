@@ -11,7 +11,7 @@ Mask pixels: 0 = background, Index + 1 = lesion of that image's disease
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -72,3 +72,23 @@ def load_lesion_mask(record: Record) -> np.ndarray:
 
 def load_image(record: Record) -> Image.Image:
     return Image.open(record.image).convert("RGB")
+
+
+def resized_copy(records: list[Record], out_root: str | Path, max_side: int = 640) -> list[Record]:
+    """Save copies with the longer side at most max_side (masks resized to the
+    same size with nearest-neighbour) and return records pointing at them.
+    Existing copies are reused, so this is cheap to call again."""
+    out_root = Path(out_root)
+    out = []
+    for r in records:
+        img_dst = out_root / "images" / r.split / r.image.name
+        mask_dst = out_root / "annotations" / r.split / r.mask.name
+        if not (img_dst.exists() and mask_dst.exists()):
+            img_dst.parent.mkdir(parents=True, exist_ok=True)
+            mask_dst.parent.mkdir(parents=True, exist_ok=True)
+            img = Image.open(r.image).convert("RGB")
+            img.thumbnail((max_side, max_side), Image.BICUBIC)
+            img.save(img_dst, quality=92)
+            Image.open(r.mask).resize(img.size, Image.NEAREST).save(mask_dst)
+        out.append(replace(r, image=img_dst, mask=mask_dst))
+    return out

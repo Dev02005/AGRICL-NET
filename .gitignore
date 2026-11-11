@@ -16,3 +16,10 @@ __pycache__/
 
 # graphify output
 graphify-out/
+
+# photos saved by the app for the next learning round
+/unknown_images/
+/models/
+
+# local Claude Code preview settings (this PC only)
+/.claude/

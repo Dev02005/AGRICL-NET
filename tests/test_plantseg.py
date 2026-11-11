@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
 
-from agricl.data.plantseg import load_lesion_mask, load_records, split_seen_unseen
+from agricl.data.plantseg import load_lesion_mask, load_records, resized_copy, split_seen_unseen
 
 HEADER = "Name,Index,Plant,Disease,Resolution,Label file,Mask ratio,URL,License,Split\n"
 
@@ -39,3 +39,22 @@ def test_mask_is_binary_even_for_index_zero(tmp_path):
     m = load_lesion_mask(recs[0])  # Index 0 -> stored value 1
     assert m.dtype == np.uint8
     assert m.sum() == 4 and set(np.unique(m)) == {0, 1}
+
+
+def test_resized_copy_keeps_mask_aligned(tmp_path):
+    root = tmp_path / "big"
+    (root / "images" / "train").mkdir(parents=True)
+    (root / "annotations" / "train").mkdir(parents=True)
+    Image.new("RGB", (1000, 500), (0, 200, 0)).save(root / "images" / "train" / "a.jpg")
+    m = np.zeros((500, 1000), np.uint8)
+    m[:, 500:] = 8  # right half is lesion
+    Image.fromarray(m).save(root / "annotations" / "train" / "a.png")
+    (root / "Metadata.csv").write_text(
+        HEADER + "a.jpg,7,Apple,apple scab,1000x500,a.png,0.5,http://x,CC-BY-NC,Training\n", encoding="utf-8")
+    small = resized_copy(load_records(root), tmp_path / "small", max_side=200)
+    img = Image.open(small[0].image)
+    mask = load_lesion_mask(small[0])
+    assert img.size == (200, 100) and mask.shape == (100, 200)
+    assert mask[:, :95].sum() == 0 and mask[:, 105:].all()
+    again = resized_copy(load_records(root), tmp_path / "small", max_side=200)  # reuses files
+    assert again[0].image == small[0].image

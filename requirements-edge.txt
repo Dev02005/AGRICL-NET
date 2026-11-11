@@ -1,0 +1,9 @@
+# Edge devices and the app with edge models. No PyTorch needed.
+# onnxruntime 1.31.1 has wheels for Python 3.11-3.14 on Windows x64, macOS ARM and
+# Linux x86-64/ARM64 (ARM64 needs glibc 2.28+: e.g. Raspberry Pi OS Bookworm 64-bit).
+# Jetson Nano on JetPack 4 (Ubuntu 18.04, glibc 2.27) needs NVIDIA's own onnxruntime build.
+# No wheel for Python 3.15 yet.
+numpy
+pillow
+onnxruntime
+streamlit  # only for the app; not needed for scripts/edge_benchmark.py
