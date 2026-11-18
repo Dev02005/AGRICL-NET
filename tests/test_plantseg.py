@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
 
-from agricl.data.plantseg import load_lesion_mask, load_records, resized_copy, split_seen_unseen
+from agricl.data.plantseg import load_image, load_lesion_mask, load_records, resized_copy, split_seen_unseen
 
 HEADER = "Name,Index,Plant,Disease,Resolution,Label file,Mask ratio,URL,License,Split\n"
 
@@ -58,3 +58,33 @@ def test_resized_copy_keeps_mask_aligned(tmp_path):
     assert mask[:, :95].sum() == 0 and mask[:, 105:].all()
     again = resized_copy(load_records(root), tmp_path / "small", max_side=200)  # reuses files
     assert again[0].image == small[0].image
+
+
+def test_exif_rotated_photo_matches_its_mask(tmp_path):
+    # Phone photo stored landscape with EXIF orientation 6 (shown rotated 90
+    # degrees clockwise); the mask was drawn on the upright, portrait view.
+    root = tmp_path / "rot"
+    (root / "images" / "train").mkdir(parents=True)
+    (root / "annotations" / "train").mkdir(parents=True)
+    raw = np.zeros((40, 80, 3), np.uint8)
+    raw[:, :40] = (255, 0, 0)  # left half of the stored pixels: red lesion
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.fromarray(raw).save(root / "images" / "train" / "r.jpg", exif=exif, quality=95)
+    m = np.zeros((80, 40), np.uint8)
+    m[:40, :] = 5  # after a 90 degree clockwise turn the stored left half is the top half
+    Image.fromarray(m).save(root / "annotations" / "train" / "r.png")
+    (root / "Metadata.csv").write_text(
+        HEADER + "r.jpg,4,Apple,apple scab,40x80,r.png,0.5,http://x,CC-BY-NC,Training\n", encoding="utf-8")
+    rec = load_records(root)[0]
+
+    img = np.array(load_image(rec))
+    mask = load_lesion_mask(rec)
+    assert img.shape[:2] == mask.shape == (80, 40)
+    red = (img[..., 0] > 128) & (img[..., 1] < 100)
+    assert red[mask == 1].mean() > 0.95 and red[mask == 0].mean() < 0.05
+
+    small = resized_copy([rec], tmp_path / "small", max_side=40)[0]
+    s_img, s_mask = Image.open(small.image), load_lesion_mask(small)
+    assert s_img.size == (20, 40) and s_mask.shape == (40, 20)
+    assert s_mask[:18].all() and s_mask[22:].sum() == 0

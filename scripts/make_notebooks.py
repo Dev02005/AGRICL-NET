@@ -598,16 +598,16 @@ if not os.path.exists(f'{DATA}/Metadata.csv'):
     if not os.path.exists(f'{CACHE}/plantseg.zip'):
         !wget -q --show-progress -O "{CACHE}/plantseg.zip" "https://zenodo.org/records/17719108/files/plantseg.zip?download=1"
     !unzip -q "{CACHE}/plantseg.zip" -d "{WORK}/data"
-from agricl.data.plantseg import load_records, split_seen_unseen
+from agricl.data.plantseg import load_image, load_records, split_seen_unseen
 seen, unseen = split_seen_unseen(load_records(DATA))
 samples = random.Random(0).sample(unseen, 2) + random.Random(0).sample([r for r in seen if r.split == 'test'], 2)
 
 for device in ('cuda', 'cpu'):
     p = AgriCLPredictor(BUNDLE, device=device)
-    p.diagnose(Image.open(samples[0].image))  # warm-up
+    p.diagnose(load_image(samples[0]))  # warm-up
     for r in samples:
         t = time.time()
-        d = p.diagnose(Image.open(r.image))
+        d = p.diagnose(load_image(r))
         print(f"[{device}] true: {r.disease:<28} -> {d.decision.status:<10} {str(d.decision.disease):<28} "
               f"severity {d.severity.percent:5.1f}% {d.severity.level:<8} {time.time() - t:5.1f} s")
     del p
@@ -758,12 +758,12 @@ print('lesion student (full resolution):', json.dumps(seg_results, indent=1))
 """),
     md("## Try the edge bundle on a few photos (ONNX Runtime only)"),
     code("""
-from PIL import Image
+from agricl.data.plantseg import load_image
 from agricl.edge import EdgePredictor
 
 p = EdgePredictor(EDGE)
 for r in random.Random(2).sample(data['unseen'], 2) + random.Random(2).sample(data['test_seen'], 2):
-    d = p.diagnose(Image.open(r.image))
+    d = p.diagnose(load_image(r))
     print(f"true: {r.disease:<28} -> {d.decision.status:<10} {str(d.decision.disease):<28} "
           f"severity {d.severity.percent:5.1f}% {d.severity.level:<8} {sum(d.timings.values()) * 1000:5.0f} ms")
 shutil.make_archive(f'{DRIVE}/agricl_edge_bundle', 'zip', EDGE)

@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 SPLIT_DIRS = {"Training": "train", "Validation": "val", "Test": "test"}
 
@@ -70,8 +70,15 @@ def load_lesion_mask(record: Record) -> np.ndarray:
     return (m > 0).astype(np.uint8)
 
 
+def open_photo(path) -> Image.Image:
+    """Open a photo upright. Phone photos store the camera's rotation in an
+    EXIF tag; PlantSeg masks were drawn on the rotated (upright) view, so the
+    rotation must be applied or image and mask disagree (9 PlantSeg images)."""
+    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+
+
 def load_image(record: Record) -> Image.Image:
-    return Image.open(record.image).convert("RGB")
+    return open_photo(record.image)
 
 
 def resized_copy(records: list[Record], out_root: str | Path, max_side: int = 640) -> list[Record]:
@@ -86,7 +93,7 @@ def resized_copy(records: list[Record], out_root: str | Path, max_side: int = 64
         if not (img_dst.exists() and mask_dst.exists()):
             img_dst.parent.mkdir(parents=True, exist_ok=True)
             mask_dst.parent.mkdir(parents=True, exist_ok=True)
-            img = Image.open(r.image).convert("RGB")
+            img = open_photo(r.image)
             img.thumbnail((max_side, max_side), Image.BICUBIC)
             img.save(img_dst, quality=92)
             Image.open(r.mask).resize(img.size, Image.NEAREST).save(mask_dst)

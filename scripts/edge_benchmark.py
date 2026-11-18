@@ -13,10 +13,15 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agricl.edge import EdgePredictor  # noqa: E402
+
+
+def open_photo(path) -> Image.Image:
+    """Open upright (phone photos store their rotation in EXIF)."""
+    return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
 
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -35,12 +40,12 @@ def main() -> None:
     t = time.perf_counter()
     p = EdgePredictor(args.bundle, threads=args.threads)
     print(f"models loaded in {time.perf_counter() - t:.1f} s")
-    p.diagnose(Image.open(photos[0]))  # warm-up
+    p.diagnose(open_photo(photos[0]))  # warm-up
 
     totals = []
     for path in photos:
         t = time.perf_counter()
-        d = p.diagnose(Image.open(path))
+        d = p.diagnose(open_photo(path))
         totals.append(time.perf_counter() - t)
         print(f"{path.name:<40} {d.decision.status:<10} {str(d.decision.disease):<32} "
               f"{d.severity.percent:5.1f}% {d.severity.level:<8} {totals[-1] * 1000:6.0f} ms")
