@@ -631,7 +631,8 @@ write("06_edge_models.ipynb", [
 # AgriCL-Net, step 6: edge models (offline, Raspberry Pi)
 
 Distils two small **student** models from the accurate **teachers**, exports them to ONNX and quantizes them to
-**INT8**, then measures size, speed and accuracy before and after:
+**INT8**, then measures size, speed and accuracy before and after. Each model goes into the bundle as INT8 only if
+INT8 loses at most 2 points of accuracy; otherwise the full-precision (FP32) file is used:
 
 | Task | Teacher | Student |
 | --- | --- | --- |
@@ -699,8 +700,8 @@ seg_results = distill_lesion(cfg)
     code("""
 import random, numpy as np, pandas as pd, torch
 from agricl.edge import OnnxModel
-from agricl.edge_eval import (classifier_inputs, classifier_top1, file_mb, latency_ms, lesion_inputs,
-                              lesion_scores, quantize_int8)
+from agricl.edge_eval import (choose_precision, classifier_inputs, classifier_top1, file_mb, latency_ms,
+                              lesion_inputs, lesion_scores, quantize_int8)
 from agricl.edge_train import export_onnx, splits
 from agricl.models.classifier import build_classifier
 from agricl.models.linknet import LinkNet18
@@ -722,13 +723,6 @@ calib = random.Random(0).sample(data['train'], min(100, len(data['train'])))
 quantize_int8(f'{EDGE}/classifier_fp32.onnx', f'{EDGE}/classifier_int8.onnx', classifier_inputs(calib, 224))
 quantize_int8(f'{EDGE}/lesion_fp32.onnx', f'{EDGE}/lesion_int8.onnx', lesion_inputs(calib, IMG_SIZE))
 
-shutil.copy(f'{OUT}/classifier/classes.json', f'{EDGE}/classes.json')
-shutil.copy(f'{OUT}/classifier/calibration.json', f'{EDGE}/calibration.json')
-json.dump({'lesion': {'onnx': 'lesion_int8.onnx', 'img_size': IMG_SIZE},
-           'classifier': {'onnx': 'classifier_int8.onnx', 'img_size': 224,
-                          'classes': 'classes.json', 'calibration': 'calibration.json'}},
-          open(f'{EDGE}/edge_bundle.json', 'w'), indent=2)
-
 test = random.Random(1).sample(data['test_seen'], min(300, len(data['test_seen'])))
 cls_x, seg_x = classifier_inputs(test, 224), lesion_inputs(test, IMG_SIZE)
 labels = np.array([c2i[r.disease] for r in test])
@@ -745,10 +739,26 @@ for task, prec in [('classifier', 'fp32'), ('classifier', 'int8'), ('lesion', 'f
 table = pd.DataFrame(rows)
 table.to_csv(f'{OUT}/edge_benchmark.csv', index=False)
 print(f'Colab CPU cores: {os.cpu_count()} (a Raspberry Pi 4 has 4)')
+
+# bundle: INT8 only where it loses at most 2 points; the other file goes to edge_unused/
+prec = choose_precision(rows, max_drop=0.02)
+print('bundle precision:', prec)
+os.makedirs(f'{OUT}/edge_unused', exist_ok=True)
+for task, p in prec.items():
+    other = 'fp32' if p == 'int8' else 'int8'
+    shutil.move(f'{EDGE}/{task}_{other}.onnx', f'{OUT}/edge_unused/{task}_{other}.onnx')
+shutil.copy(f'{OUT}/classifier/classes.json', f'{EDGE}/classes.json')
+shutil.copy(f'{OUT}/classifier/calibration.json', f'{EDGE}/calibration.json')
+json.dump({'lesion': {'onnx': f"lesion_{prec['lesion']}.onnx", 'img_size': IMG_SIZE},
+           'classifier': {'onnx': f"classifier_{prec['classifier']}.onnx", 'img_size': 224,
+                          'classes': 'classes.json', 'calibration': 'calibration.json'}},
+          open(f'{EDGE}/edge_bundle.json', 'w'), indent=2)
 table
 """),
     md("""
 **How to read it:** INT8 files should be about 4x smaller and usually faster on CPU, with a small accuracy drop.
+Some networks quantize badly (in our run the MobileNetV3 classifier lost 12.7 points), which is why each model's
+precision is chosen from this table.
 Teacher accuracy for comparison: `cls_results['teacher']` below, and notebook 01's `results.json`.
 """),
     code("""

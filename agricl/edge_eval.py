@@ -78,3 +78,16 @@ def lesion_scores(model, records, inputs: list[np.ndarray]) -> dict:
 
 def file_mb(path: str | Path) -> float:
     return Path(path).stat().st_size / 2**20
+
+
+def choose_precision(rows: list[dict], max_drop: float = 0.02) -> dict[str, str]:
+    """Per model, 'int8' if it loses at most max_drop accuracy against 'fp32', else 'fp32'.
+
+    rows: benchmark rows with 'model', 'precision' and 'accuracy' (top-1 or Dice,
+    both 0-1). INT8 can hurt some networks badly (MobileNetV3's hard-swish and
+    squeeze-excite layers lost 12.7 top-1 points in notebook 06), so it is used
+    only where the measured drop is small."""
+    acc = {(r["model"], r["precision"]): float(r["accuracy"]) for r in rows}
+    models = dict.fromkeys(r["model"] for r in rows)
+    return {m: "int8" if (m, "int8") in acc and acc[(m, "fp32")] - acc[(m, "int8")] <= max_drop else "fp32"
+            for m in models}

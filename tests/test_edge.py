@@ -95,3 +95,17 @@ def test_lesion_scores_with_fake_model(tmp_path):
     logits[..., 4:] = 3.0
     s = lesion_scores(lambda x: logits, [rec], [np.zeros((1, 3, 8, 8), np.float32)])
     assert s["images"] == 1 and s["mean_dice"] > 0.9
+
+
+def test_choose_precision_keeps_fp32_when_int8_hurts():
+    from agricl.edge_eval import choose_precision
+
+    rows = [  # notebook 06 benchmark
+        {"model": "classifier", "precision": "fp32", "accuracy": 0.7567},
+        {"model": "classifier", "precision": "int8", "accuracy": 0.6300},
+        {"model": "lesion", "precision": "fp32", "accuracy": 0.6858},
+        {"model": "lesion", "precision": "int8", "accuracy": 0.6780},
+    ]
+    assert choose_precision(rows) == {"classifier": "fp32", "lesion": "int8"}
+    assert choose_precision(rows, max_drop=0.2) == {"classifier": "int8", "lesion": "int8"}
+    assert choose_precision(rows[:1]) == {"classifier": "fp32"}

@@ -50,7 +50,8 @@ under `MyDrive/Colab Notebooks/agricl-net/`.
    `MyDrive/Colab Notebooks/agricl-net/agricl_app_bundle.zip` for the app and tests it.
 6. `notebooks/06_edge_models.ipynb`: distils LinkNet-ResNet18 (lesions) and
    MobileNetV3 (classifier) students, exports them to ONNX, quantizes to INT8
-   and reports size, speed and accuracy. Output:
+   (used only where it costs at most 2 points of accuracy; the classifier stays
+   FP32) and reports size, speed and accuracy. Output:
    `MyDrive/Colab Notebooks/agricl-net/agricl_edge_bundle.zip` (runs without PyTorch).
 7. `notebooks/07_results_report.ipynb`: gathers all finished runs into
    `MyDrive/Colab Notebooks/agricl-net/report/` (`report.md` tables plus charts for the
