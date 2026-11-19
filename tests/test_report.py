@@ -16,6 +16,9 @@ def fake_runs(root):
     write(root / "severity_lesion_sam2unet_l_352_sam2_leaf" / "severity_summary.json",
           {"seen": {"images": 150, "severity_r2": 0.85, "severity_rmse": 6.2, "level_accuracy": 0.8},
            "unseen": {"images": 150, "severity_r2": 0.81, "severity_rmse": 7.0, "level_accuracy": 0.77}})
+    write(root / "pdsnets_lesion_sam2unet_l_352" / "pdsnets_summary.json",
+          {"full_sam2_leaf": {"all": {"images": 240, "severity_r2": 0.7, "severity_rmse": 9.5, "severity_mae": 6.0,
+                                      "level_accuracy": 0.75, "mean_lesion_dice": 0.6, "mean_leaf_iou": 0.8}}})
     write(root / "continual_swin" / "results.json",
           {"finetune": {"average_incremental_accuracy": 0.5, "final_accuracy": 0.3, "forgetting": 0.6,
                         "calibration": {"unseen_flagged_unknown": 0.4}},
@@ -40,6 +43,9 @@ def test_report_content(tmp_path):
     md = build_report(tmp_path)
     assert "62.0% on seen diseases vs 58.0% on unseen diseases (gap +4.0 points)" in md
     assert "R² 0.850 on seen vs 0.810 on unseen" in md
+    assert "True severity on PDSNets (pdsnets_lesion_sam2unet_l_352, 240 photos" in md
+    assert "RMSE 9.5 points" in md
+    assert "| Full system: predicted lesions + SAM2 leaf | 240 | 0.700 | 9.50 | 6.00 | 75.0% |" in md
     assert "| continual_swin | replay_kd | 70.0% | 60.0% | 15.0% | 55.0% |" in md
     assert "## Disease classifier (Swin-T, joint training)\n\n_Not run yet._" in md
     assert "smoke" not in md
@@ -47,7 +53,7 @@ def test_report_content(tmp_path):
 
 def test_empty_runs_folder(tmp_path):
     md = build_report(tmp_path)
-    assert md.count("_Not run yet._") == 6
+    assert md.count("_Not run yet._") == 7
 
 
 def test_helpers():

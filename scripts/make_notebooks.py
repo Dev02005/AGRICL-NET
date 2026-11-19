@@ -874,3 +874,158 @@ Copy the tables from `report.md` and the charts into the documentation ("New Doc
 "Results" section, and update the Evaluation Plan with the measured numbers.
 """),
 ])
+
+# ------------------------------------------------- 08: true severity on PDSNets
+write("08_pdsnets_severity.ipynb", [
+    md("""
+# AgriCL-Net, step 8: true severity on the PDSNets field dataset
+
+PDSNets (Field-PDD, Zhao et al. 2025) labels the **leaf** and the **disease spots** of 240 field photos, so it gives
+the true severity = spots / leaf x 100. Its three diseases (soybean bacterial blight, wheat stripe rust, cedar apple
+rust) are exactly the ones **held out of all training**, so every number here is on diseases the models never saw.
+
+Several "systems" are compared on the same photos, which separates the two sources of error:
+
+| System | Lesions | Leaf | What it shows |
+| --- | --- | --- | --- |
+| `full_sam2_leaf` | SAM2-UNet | SAM2 | the full app |
+| `lesion_model_true_leaf` | SAM2-UNet | true | error of the lesion model alone |
+| `true_lesion_sam2_leaf` | true | SAM2 | error of the leaf mask alone |
+| `colour_leaf` | SAM2-UNet | colour index (ExG) | the offline leaf fallback |
+| `edge` | LinkNet INT8 (notebook 06) | colour index | the edge version |
+
+**Needs:** a T4 GPU, Internet, and these inputs (*File > Add input*):
+* the **output of notebook 06** (it also contains notebook 01's lesion model); or notebook 01's output alone, then
+  the `edge` system is skipped;
+* the dataset **"Field-acquired Plant Disease Dataset"** (alexzcheny/testdataset). If it is not attached, it is
+  downloaded with `kagglehub`.
+"""),
+    md("## Settings"),
+    code("""
+SIZE = 'l'                   # must match the lesion run from notebook 01
+IMG_SIZE = 352
+LESION_RUN = f"lesion_sam2unet_{SIZE.replace('+', 'p')}_{IMG_SIZE}"
+EDGE_RUN = 'edge_continual'  # notebook 06 run; '' skips the edge system
+LIMIT = None                 # number of photos; None = all 240 (use 12 for a quick test)
+"""),
+    *BASE_SETUP[:4],
+    *SAM2_SETUP,
+    md("## PDSNets dataset and a check of the label colours"),
+    code("""
+import glob, json, random
+from collections import Counter
+import numpy as np
+from PIL import Image
+from agricl.data.pdsnets import BACKGROUND, HEALTHY, SPOT, find_root, load_label, load_records
+
+if ON_KAGGLE and glob.glob('/kaggle/input/**/*_label.png', recursive=True):
+    PDS = find_root('/kaggle/input')
+else:
+    import kagglehub
+    PDS = find_root(kagglehub.dataset_download('alexzcheny/testdataset'))
+records = load_records(PDS)
+if LIMIT:
+    records = random.Random(0).sample(records, LIMIT)
+print(PDS, len(records), 'photos:', dict(Counter(r.disease for r in records)))
+
+# label check: raw values should be black / gray / white; the decoded classes must all appear
+raw, decoded = Counter(), Counter()
+for r in records[::max(1, len(records) // 20)]:
+    vals, counts = np.unique(np.asarray(Image.open(r.label).convert('L')), return_counts=True)
+    raw.update(dict(zip(vals.tolist(), counts.tolist())))
+    decoded.update(np.unique(load_label(r)).tolist())
+print('label mode:', Image.open(records[0].label).mode, '| most common raw values:', raw.most_common(6))
+print('photos containing background / healthy / spot:', [decoded[c] for c in (BACKGROUND, HEALTHY, SPOT)])
+assert decoded[HEALTHY] and decoded[SPOT], 'label colours not recognised: check decode_label'
+"""),
+    md("## Load the models"),
+    code("""
+!pip -q install onnxruntime
+import torch
+from agricl.eval_pdsnets import clip_to, evaluate_pdsnets
+from agricl.leaf import SAM2LeafSegmenter, vegetation_mask
+from agricl.pipeline import load_lesion_model
+from agricl.train_lesion import predict_mask
+
+BEST = f'{DRIVE}/runs/{LESION_RUN}/best.pt'
+assert os.path.exists(BEST), f'{BEST} not found: attach the output of notebook 06 (or 01)'
+lesion_model = load_lesion_model(SAM2UNET, SIZE, CKPT, BEST, 'cuda')
+sam_leaf = SAM2LeafSegmenter(SAM2UNET, SIZE, CKPT, device='cuda')
+
+EDGE_DIR = f'{DRIVE}/runs/{EDGE_RUN}/edge_bundle'
+edge = None
+if EDGE_RUN and os.path.exists(f'{EDGE_DIR}/edge_bundle.json'):
+    from agricl.edge import EdgePredictor, lesion_from_logits, to_input
+    edge = EdgePredictor(EDGE_DIR)
+print('edge system:', 'yes' if edge else 'skipped (no notebook 06 output)')
+
+OUT = f'{DRIVE}/runs/pdsnets_{LESION_RUN}'
+os.makedirs(OUT, exist_ok=True)
+print('results ->', OUT)
+"""),
+    md("## Evaluate every system on every photo"),
+    code("""
+def pred(img, cache):
+    if 'pred' not in cache:
+        cache['pred'] = predict_mask(lesion_model, img, IMG_SIZE, 'cuda')
+    return cache['pred']
+
+systems = {
+    'full_sam2_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), sam_leaf.segment(rgb, pred(img, c))),
+    'lesion_model_true_leaf': lambda img, rgb, spot, leaf, c: (clip_to(pred(img, c), leaf), leaf),
+    'true_lesion_sam2_leaf': lambda img, rgb, spot, leaf, c: (spot, sam_leaf.segment(rgb, spot)),
+    'colour_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), vegetation_mask(rgb, pred(img, c))),
+}
+if edge:
+    def edge_system(img, rgb, spot, leaf, c):
+        lesion = lesion_from_logits(edge.lesion_model(to_input(img, edge.lesion_size)), rgb.shape[:2])
+        return lesion, vegetation_mask(rgb, lesion)
+    systems['edge'] = edge_system
+
+with torch.no_grad():
+    summary = evaluate_pdsnets(records, systems, out_csv=f'{OUT}/pdsnets_per_image.csv', progress=40)
+json.dump(summary, open(f'{OUT}/pdsnets_summary.json', 'w'), indent=2)
+
+# printed (not a table display) so the numbers also appear in the Kaggle log
+keys = ['images', 'severity_r2', 'severity_rmse', 'severity_mae', 'level_accuracy', 'mean_lesion_dice',
+        'mean_leaf_iou', 'mean_true_severity']
+print('system | diseases | ' + ' | '.join(keys))
+for name, s in summary.items():
+    for group, v in [('all', s['all'])] + list(s['by_disease'].items()):
+        print(f'{name} | {group} | ' + ' | '.join(str(round(v[k], 3)) for k in keys))
+"""),
+    md("## Examples: true label vs. the full system"),
+    code("""
+import matplotlib.pyplot as plt
+from agricl.data.pdsnets import load_image
+from agricl.severity import compute_severity, severity_from_pdsnets_label
+
+examples = [next(r for r in records if r.disease == d) for d in sorted({r.disease for r in records})]
+fig, ax = plt.subplots(len(examples), 3, figsize=(12, 4 * len(examples)), squeeze=False)
+for row, r in zip(ax, examples):
+    label = load_label(r)
+    img = load_image(r, label.shape[::-1])
+    rgb = np.array(img)
+    lesion = predict_mask(lesion_model, img, IMG_SIZE, 'cuda')
+    leaf = sam_leaf.segment(rgb, lesion)
+    over = rgb.astype(float)
+    over[leaf > 0] = 0.6 * over[leaf > 0] + 0.4 * np.array([0, 200, 0])
+    over[lesion > 0] = [255, 0, 0]
+    row[0].imshow(img); row[0].set_title(r.disease)
+    row[1].imshow(label, cmap='gray', vmin=0, vmax=2)
+    row[1].set_title(f'true: {severity_from_pdsnets_label(label, HEALTHY, SPOT):.1f}%')
+    row[2].imshow(over.astype(np.uint8))
+    row[2].set_title(f'predicted: {compute_severity(leaf, lesion).percent:.1f}%')
+    for a in row: a.axis('off')
+plt.tight_layout(); fig.savefig(f'{OUT}/examples.png', dpi=120); plt.show()
+"""),
+    md("""
+## How to read it
+* `lesion_model_true_leaf` vs. `true_lesion_sam2_leaf`: whichever has the larger RMSE is the main source of
+  severity error (lesion model or leaf mask).
+* `full_sam2_leaf` is what the app reports; `edge` is what the offline version reports.
+* Notebook 02 could only compare against a predicted leaf on PlantSeg (RMSE 18 to 20 points); this notebook
+  measures severity against a true leaf.
+* Then run notebook 07 (results report) with this notebook's output attached as well.
+"""),
+])

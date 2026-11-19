@@ -37,13 +37,16 @@ def md_table(headers: list[str], rows: list[list]) -> str:
 def collect(runs_dir: str | Path) -> dict:
     """{section: {run name: loaded results}} for every finished (non-smoke) run."""
     d = Path(runs_dir)
-    out = {"lesion": {}, "severity": {}, "classifier": {}, "continual": {}, "edge": {}}
+    out = {"lesion": {}, "severity": {}, "pdsnets": {}, "classifier": {}, "continual": {}, "edge": {}}
     for p in _runs(d, "lesion_"):
         if (r := _load(p / "results.json")) is not None:
             out["lesion"][p.name] = r
     for p in _runs(d, "severity_"):
         if (r := _load(p / "severity_summary.json")) is not None:
             out["severity"][p.name] = r
+    for p in _runs(d, "pdsnets_"):
+        if (r := _load(p / "pdsnets_summary.json")) is not None:
+            out["pdsnets"][p.name] = r
     for p in _runs(d, "classifier_"):
         if (r := _load(p / "results.json")) is not None:
             out["classifier"][p.name] = r
@@ -85,6 +88,29 @@ def section_severity(res: dict) -> str:
             rows.append([name, group, g.get("images", "n/a"), num(g.get("severity_r2")),
                          num(g.get("severity_rmse"), 2), pct(g.get("level_accuracy"))])
     return md_table(["Run", "Diseases", "Images", "Severity R²", "RMSE (points)", "Level agreement"], rows)
+
+
+PDSNETS_SYSTEMS = {
+    "full_sam2_leaf": "Full system: predicted lesions + SAM2 leaf",
+    "lesion_model_true_leaf": "Predicted lesions + true leaf (lesion error only)",
+    "true_lesion_sam2_leaf": "True lesions + SAM2 leaf (leaf error only)",
+    "colour_leaf": "Predicted lesions + colour-index leaf",
+    "edge": "Edge models: LinkNet lesions + colour-index leaf",
+}
+
+
+def section_pdsnets(res: dict) -> str:
+    if not res:
+        return NOT_RUN
+    rows = []
+    for name, r in res.items():
+        for system, v in r.items():
+            a = v.get("all", {})
+            rows.append([name, PDSNETS_SYSTEMS.get(system, system), a.get("images", "n/a"),
+                         num(a.get("severity_r2")), num(a.get("severity_rmse"), 2), num(a.get("severity_mae"), 2),
+                         pct(a.get("level_accuracy")), num(a.get("mean_lesion_dice")), num(a.get("mean_leaf_iou"))])
+    return md_table(["Run", "System", "Images", "Severity R²", "RMSE (points)", "MAE (points)", "Level correct",
+                     "Lesion Dice", "Leaf IoU"], rows)
 
 
 def section_classifier(res: dict) -> str:
@@ -150,6 +176,11 @@ def key_claim(res: dict) -> str:
         s, u = r.get("seen", {}).get("severity_r2"), r.get("unseen", {}).get("severity_r2")
         if s is not None and u is not None:
             lines.append(f"- Severity ({name}): R² {num(s)} on seen vs {num(u)} on unseen diseases.")
+    for name, r in res["pdsnets"].items():
+        a = r.get("full_sam2_leaf", {}).get("all")
+        if a:
+            lines.append(f"- True severity on PDSNets ({name}, {a['images']} photos of the three unseen diseases): "
+                         f"R² {num(a['severity_r2'])}, RMSE {num(a['severity_rmse'], 1)} points.")
     return "\n".join(lines) if lines else NOT_RUN
 
 
@@ -161,6 +192,7 @@ def build_report(runs_dir: str | Path) -> str:
         "## Key claim: severity on diseases never seen in training", key_claim(res),
         "## Lesion segmentation (SAM2-UNet)", section_lesion(res["lesion"]),
         "## Severity: true vs. predicted lesions (same leaf mask)", section_severity(res["severity"]),
+        "## True severity on PDSNets (unseen diseases, true leaf labels)", section_pdsnets(res["pdsnets"]),
         "## Disease classifier (Swin-T, joint training)", section_classifier(res["classifier"]),
         "## Continual learning (5 rounds by crop)", section_continual(res["continual"]),
         "## Edge models (distilled, ONNX, INT8)", section_edge(res["edge"]),
