@@ -15,6 +15,7 @@ diseases the models have never seen.
 from __future__ import annotations
 
 import csv
+import zlib
 from collections import defaultdict
 from typing import Callable
 
@@ -26,6 +27,13 @@ from .severity import compute_severity, severity_from_pdsnets_label, severity_le
 
 # system(img, rgb, true_spot, true_leaf, cache) -> (lesion mask, leaf mask), both HxW
 System = Callable[..., tuple[np.ndarray, np.ndarray]]
+
+
+def split_of(name: str) -> str:
+    """Fixed half of the photos ("dev") for choosing between methods; the
+    other half ("test") is only for reporting, so the choice is not tuned on
+    the numbers that are reported."""
+    return "dev" if zlib.crc32(name.encode("utf-8")) % 2 == 0 else "test"
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -45,7 +53,7 @@ def summarize(rows: list[dict]) -> dict:
 
 def evaluate_pdsnets(records, systems: dict[str, System], out_csv: str | None = None,
                      progress: int = 0) -> dict:
-    """Returns {system: {"all": summary, "by_disease": {disease: summary}}}."""
+    """Returns {system: {"all": summary, "by_disease": {...}, "by_split": {"dev": ..., "test": ...}}}."""
     rows = []
     for i, rec in enumerate(records):
         label = load_label(rec)
@@ -62,7 +70,7 @@ def evaluate_pdsnets(records, systems: dict[str, System], out_csv: str | None = 
             lesion, leaf = system(img, rgb, spot, leaf_true, cache)
             est = compute_severity(leaf, lesion)
             rows.append({
-                "system": name, "image": rec.image.name, "disease": rec.disease,
+                "system": name, "image": rec.image.name, "disease": rec.disease, "split": split_of(rec.image.name),
                 "severity_true": true, "severity_est": est.percent,
                 "level_true": severity_level(true), "level_est": est.level,
                 "lesion_dice": dice(lesion, spot), "leaf_iou": iou(leaf, leaf_true),
@@ -81,10 +89,12 @@ def evaluate_pdsnets(records, systems: dict[str, System], out_csv: str | None = 
         by[r["system"]].append(r)
     out = {}
     for name, rs in by.items():
-        diseases = defaultdict(list)
+        diseases, splits = defaultdict(list), defaultdict(list)
         for r in rs:
             diseases[r["disease"]].append(r)
-        out[name] = {"all": summarize(rs), "by_disease": {d: summarize(v) for d, v in sorted(diseases.items())}}
+            splits[r["split"]].append(r)
+        out[name] = {"all": summarize(rs), "by_disease": {d: summarize(v) for d, v in sorted(diseases.items())},
+                     "by_split": {k: summarize(v) for k, v in sorted(splits.items())}}
     return out
 
 

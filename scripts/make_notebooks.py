@@ -888,11 +888,15 @@ Several "systems" are compared on the same photos, which separates the two sourc
 
 | System | Lesions | Leaf | What it shows |
 | --- | --- | --- | --- |
-| `full_sam2_leaf` | SAM2-UNet | SAM2 | the full app |
+| `full_sam2_leaf` | SAM2-UNet | SAM2, anchored on the lesions | the full app |
 | `lesion_model_true_leaf` | SAM2-UNet | true | error of the lesion model alone |
-| `true_lesion_sam2_leaf` | true | SAM2 | error of the leaf mask alone |
-| `colour_leaf` | SAM2-UNet | colour index (ExG) | the offline leaf fallback |
-| `edge` | LinkNet INT8 (notebook 06) | colour index | the edge version |
+| `true_lesion_sam2_leaf` | true | SAM2, anchored on the lesions | error of the leaf mask alone |
+| `colour_leaf` | SAM2-UNet | colour index, green regions touching the lesions | the offline leaf fallback |
+| `edge` | LinkNet INT8 (notebook 06) | colour index, as above | the edge version |
+
+Systems ending in `_v1` use the original leaf masks (SAM2 prompted from the green-index mask; the whole green-index
+mask), for comparison. Each photo is in a fixed half: **dev** is for choosing between leaf methods, **test** is for
+reporting, so the choice is not tuned on the reported numbers.
 
 **Needs:** a T4 GPU, Internet, and these inputs (*File > Add input*):
 * the **output of notebook 06** (it also contains notebook 01's lesion model); or notebook 01's output alone, then
@@ -943,7 +947,7 @@ assert decoded[HEALTHY] and decoded[SPOT], 'label colours not recognised: check 
 !pip -q install onnxruntime
 import torch
 from agricl.eval_pdsnets import clip_to, evaluate_pdsnets
-from agricl.leaf import SAM2LeafSegmenter, vegetation_mask
+from agricl.leaf import SAM2LeafSegmenter, anchored_vegetation_mask, vegetation_mask
 from agricl.pipeline import load_lesion_model
 from agricl.train_lesion import predict_mask
 
@@ -970,17 +974,28 @@ def pred(img, cache):
         cache['pred'] = predict_mask(lesion_model, img, IMG_SIZE, 'cuda')
     return cache['pred']
 
+def sam(rgb, lesion, prompt):
+    return sam_leaf.segment(rgb, lesion, prompt=prompt)
+
+# new leaf masks anchored on the lesions; '_v1' = the original masks, for comparison
 systems = {
-    'full_sam2_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), sam_leaf.segment(rgb, pred(img, c))),
+    'full_sam2_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), sam(rgb, pred(img, c), 'lesion')),
+    'full_sam2v1_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), sam(rgb, pred(img, c), 'vegetation')),
     'lesion_model_true_leaf': lambda img, rgb, spot, leaf, c: (clip_to(pred(img, c), leaf), leaf),
-    'true_lesion_sam2_leaf': lambda img, rgb, spot, leaf, c: (spot, sam_leaf.segment(rgb, spot)),
-    'colour_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), vegetation_mask(rgb, pred(img, c))),
+    'true_lesion_sam2_leaf': lambda img, rgb, spot, leaf, c: (spot, sam(rgb, spot, 'lesion')),
+    'true_lesion_sam2v1_leaf': lambda img, rgb, spot, leaf, c: (spot, sam(rgb, spot, 'vegetation')),
+    'colour_leaf': lambda img, rgb, spot, leaf, c: (pred(img, c), anchored_vegetation_mask(rgb, pred(img, c))),
+    'colour_leaf_v1': lambda img, rgb, spot, leaf, c: (pred(img, c), vegetation_mask(rgb, pred(img, c))),
 }
 if edge:
-    def edge_system(img, rgb, spot, leaf, c):
-        lesion = lesion_from_logits(edge.lesion_model(to_input(img, edge.lesion_size)), rgb.shape[:2])
-        return lesion, vegetation_mask(rgb, lesion)
-    systems['edge'] = edge_system
+    def edge_lesion(img, rgb, c):
+        if 'edge' not in c:
+            c['edge'] = lesion_from_logits(edge.lesion_model(to_input(img, edge.lesion_size)), rgb.shape[:2])
+        return c['edge']
+    systems['edge'] = lambda img, rgb, spot, leaf, c: (
+        edge_lesion(img, rgb, c), anchored_vegetation_mask(rgb, edge_lesion(img, rgb, c)))
+    systems['edge_v1'] = lambda img, rgb, spot, leaf, c: (
+        edge_lesion(img, rgb, c), vegetation_mask(rgb, edge_lesion(img, rgb, c)))
 
 with torch.no_grad():
     summary = evaluate_pdsnets(records, systems, out_csv=f'{OUT}/pdsnets_per_image.csv', progress=40)
@@ -989,9 +1004,10 @@ json.dump(summary, open(f'{OUT}/pdsnets_summary.json', 'w'), indent=2)
 # printed (not a table display) so the numbers also appear in the Kaggle log
 keys = ['images', 'severity_r2', 'severity_rmse', 'severity_mae', 'level_accuracy', 'mean_lesion_dice',
         'mean_leaf_iou', 'mean_true_severity']
-print('system | diseases | ' + ' | '.join(keys))
+print('system | group | ' + ' | '.join(keys))
 for name, s in summary.items():
-    for group, v in [('all', s['all'])] + list(s['by_disease'].items()):
+    groups = [('all', s['all'])] + list(s['by_split'].items()) + list(s['by_disease'].items())
+    for group, v in groups:
         print(f'{name} | {group} | ' + ' | '.join(str(round(v[k], 3)) for k in keys))
 """),
     md("## Examples: true label vs. the full system"),
@@ -1007,7 +1023,7 @@ for row, r in zip(ax, examples):
     img = load_image(r, label.shape[::-1])
     rgb = np.array(img)
     lesion = predict_mask(lesion_model, img, IMG_SIZE, 'cuda')
-    leaf = sam_leaf.segment(rgb, lesion)
+    leaf = sam_leaf.segment(rgb, lesion, prompt='lesion')
     over = rgb.astype(float)
     over[leaf > 0] = 0.6 * over[leaf > 0] + 0.4 * np.array([0, 200, 0])
     over[lesion > 0] = [255, 0, 0]

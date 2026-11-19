@@ -81,6 +81,16 @@ def test_evaluate_perfect_and_leaf_error(tmp_path):
     assert out["lesions clipped"]["all"]["severity_rmse"] == pytest.approx(0)
     assert set(out["perfect"]["by_disease"]) == {"apple rust", "soybean bacterial blight", "wheat stripe rust"}
     assert (tmp_path / "rows.csv").read_text().count("\n") == 1 + 3 * 3
+    splits = out["perfect"]["by_split"]
+    assert sum(v["images"] for v in splits.values()) == 3 and set(splits) <= {"dev", "test"}
+
+
+def test_split_is_fixed_and_balanced():
+    from agricl.eval_pdsnets import split_of
+
+    names = [f"Wheat_{i:04d}.jpg" for i in range(400)]
+    assert [split_of(n) for n in names] == [split_of(n) for n in names]
+    assert 150 < sum(split_of(n) == "dev" for n in names) < 250
 
 
 def test_cache_is_per_photo(tmp_path):

@@ -58,3 +58,56 @@ def test_choose_mask_prefers_agreement():
     bad = np.ones_like(ref)
     masks = np.stack([bad, good])
     assert (choose_mask(masks, np.array([0.99, 0.5]), ref) == good).all()
+
+
+# ---------------------------------------------------------------- lesion-anchored leaf
+from agricl.leaf import anchored_vegetation_mask, choose_leaf_mask, dilate, label_components  # noqa: E402
+
+
+def two_leaves():
+    """Diseased leaf on the left, a second healthy leaf on the right, soil between."""
+    img = np.zeros((40, 60, 3), np.uint8)
+    img[:] = (120, 90, 60)
+    img[10:30, 5:25] = (40, 160, 40)
+    img[10:30, 35:55] = (40, 160, 40)
+    img[18:22, 12:16] = (110, 80, 30)
+    lesion = np.zeros((40, 60), np.uint8)
+    lesion[18:22, 12:16] = 1
+    return img, lesion
+
+
+def test_label_components_and_dilate():
+    m = np.zeros((10, 10), np.uint8)
+    m[1:3, 1:3] = 1
+    m[6:9, 6:9] = 1
+    labels, n = label_components(m)
+    assert n == 2 and labels[1, 1] != labels[7, 7] and labels[0, 9] == 0
+    assert dilate(m[:5, :5], 1).sum() == 16
+
+
+def test_anchored_vegetation_keeps_only_the_diseased_leaf():
+    img, lesion = two_leaves()
+    plain = vegetation_mask(img, lesion)
+    anchored = anchored_vegetation_mask(img, lesion)
+    assert plain[20, 45] == 1 and anchored[20, 45] == 0  # other leaf dropped
+    assert anchored[12, 8] == 1 and anchored[19, 13] == 1  # diseased leaf and its lesion kept
+    assert anchored.sum() == 400
+    assert (anchored_vegetation_mask(img, None) == vegetation_mask(img)).all()
+
+
+def test_choose_leaf_mask_picks_smallest_leaf_containing_lesions():
+    lesion = np.zeros((20, 20), np.uint8)
+    lesion[8:10, 8:10] = 1                   # 4 px
+    spot = lesion.copy()                     # just the spot: rejected
+    leaf = np.zeros_like(lesion)
+    leaf[4:14, 4:14] = 1                     # the leaf: chosen
+    plant = np.zeros_like(lesion)
+    plant[1:17, 1:17] = 1                    # bigger, covers as well: not chosen
+    scene = np.ones_like(lesion)             # fills the photo: rejected
+    other = np.zeros_like(lesion)
+    other[15:20, 15:20] = 1                  # no lesion inside: rejected
+    masks = np.stack([spot, plant, leaf, scene, other])
+    out = choose_leaf_mask(masks, np.array([0.99, 0.95, 0.8, 0.99, 0.99]), lesion)
+    assert (out == leaf).all()
+    assert choose_leaf_mask(np.stack([spot, scene]), np.array([0.9, 0.9]), lesion) is None
+    assert choose_leaf_mask(masks, np.ones(5), np.zeros_like(lesion)) is None

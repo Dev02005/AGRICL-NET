@@ -96,6 +96,10 @@ PDSNETS_SYSTEMS = {
     "true_lesion_sam2_leaf": "True lesions + SAM2 leaf (leaf error only)",
     "colour_leaf": "Predicted lesions + colour-index leaf",
     "edge": "Edge models: LinkNet lesions + colour-index leaf",
+    "full_sam2v1_leaf": "Full system, original SAM2 leaf (v1)",
+    "true_lesion_sam2v1_leaf": "True lesions + original SAM2 leaf (v1)",
+    "colour_leaf_v1": "Predicted lesions + original colour-index leaf (v1)",
+    "edge_v1": "Edge models, original colour-index leaf (v1)",
 }
 
 

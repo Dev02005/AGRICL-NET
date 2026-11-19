@@ -83,20 +83,128 @@ def choose_mask(masks: np.ndarray, scores: np.ndarray, reference: np.ndarray) ->
     return (masks[best] > 0).astype(np.uint8)
 
 
+def dilate(mask: np.ndarray, r: int) -> np.ndarray:
+    """Binary dilation with a (2r+1) square, NumPy only."""
+    m = mask > 0
+    if r <= 0:
+        return m.astype(np.uint8)
+    p = np.pad(m, r, constant_values=False)
+    out = np.zeros_like(m)
+    h, w = m.shape
+    for dy in range(2 * r + 1):
+        for dx in range(2 * r + 1):
+            out |= p[dy:dy + h, dx:dx + w]
+    return out.astype(np.uint8)
+
+
+def label_components(mask: np.ndarray) -> tuple[np.ndarray, int]:
+    """8-connected components: (labels, count); label 0 is background.
+    OpenCV when available (fast), else a pure-NumPy/Python flood fill."""
+    fg = (mask > 0).astype(np.uint8)
+    try:
+        import cv2
+
+        n, labels = cv2.connectedComponents(fg, connectivity=8)
+        return labels.astype(np.int32), int(n - 1)
+    except ImportError:
+        pass
+    labels = np.zeros(fg.shape, np.int32)
+    h, w = fg.shape
+    n = 0
+    for sy, sx in zip(*np.nonzero(fg)):
+        if labels[sy, sx]:
+            continue
+        n += 1
+        labels[sy, sx] = n
+        stack = [(sy, sx)]
+        while stack:
+            y, x = stack.pop()
+            for ny in range(max(y - 1, 0), min(y + 2, h)):
+                for nx in range(max(x - 1, 0), min(x + 2, w)):
+                    if fg[ny, nx] and not labels[ny, nx]:
+                        labels[ny, nx] = n
+                        stack.append((ny, nx))
+    return labels, n
+
+
+def anchored_vegetation_mask(rgb: np.ndarray, lesion: np.ndarray | None, reach: int = 5) -> np.ndarray:
+    """Colour-index leaf restricted to the green regions that touch the lesions.
+
+    The lesions sit on the leaf being assessed, so green regions elsewhere in
+    the photo (other leaves, grass, a blurred background) are dropped. Falls
+    back to the plain vegetation mask when there are no lesions or none of
+    the green regions touch them."""
+    veg = excess_green(rgb) > otsu_threshold(excess_green(rgb))
+    if lesion is None or not (lesion > 0).any():
+        return veg.astype(np.uint8)
+    les = lesion > 0
+    labels, n = label_components(veg & ~les)
+    keep = np.unique(labels[(dilate(les, reach) > 0) & (labels > 0)])
+    if n == 0 or len(keep) == 0:
+        return (veg | les).astype(np.uint8)
+    return (np.isin(labels, keep) | les).astype(np.uint8)
+
+
+def choose_leaf_mask(masks: np.ndarray, scores: np.ndarray, lesion: np.ndarray,
+                     min_cover: float = 0.5, min_growth: float = 1.15, max_area: float = 0.9) -> np.ndarray | None:
+    """Leaf among SAM's candidates, anchored on the lesions.
+
+    Valid candidates contain at least min_cover of the lesion pixels, are
+    larger than the lesions themselves (else it is just a spot) and do not
+    fill the photo (else it is the background). Among those that cover the
+    lesions about as well as the best one, the smallest is the leaf: the next
+    larger candidates are the whole plant or the scene. None if no candidate
+    is valid."""
+    les = lesion > 0
+    n_les = int(les.sum())
+    if n_les == 0:
+        return None
+    valid = []
+    for m, s in zip(masks, scores):
+        m = m > 0
+        area = int(m.sum())
+        cover = (m & les).sum() / n_les
+        if cover >= min_cover and area >= min_growth * n_les and area <= max_area * m.size:
+            valid.append((cover, area, float(s), m))
+    if not valid:
+        return None
+    best = max(v[0] for v in valid)
+    near = [v for v in valid if v[0] >= 0.9 * best]
+    return min(near, key=lambda v: (v[1], -v[2]))[3].astype(np.uint8)
+
+
 class SAM2LeafSegmenter:
+    """prompt="vegetation": points from the green-index mask plus the lesions,
+    candidate closest to the green-index mask (the original method).
+    prompt="lesion": one prompt per lesion point, the leaf is the smallest
+    candidate that contains the lesions (choose_leaf_mask); used when field
+    photos have green backgrounds or other leaves."""
+
     def __init__(self, repo_dir: str, size: str = "l", checkpoint: str | None = None,
-                 device: str = "cuda", n_veg_points: int = 5, n_lesion_points: int = 2, seed: int = 0) -> None:
+                 device: str = "cuda", n_veg_points: int = 5, n_lesion_points: int = 2, seed: int = 0,
+                 prompt: str = "vegetation") -> None:
         from .models.sam2unet import CONFIGS, _import_repo
 
         build_sam2 = _import_repo(repo_dir)[0]
         from sam2.sam2_image_predictor import SAM2ImagePredictor  # bundled with SAM2-UNet
 
+        if prompt not in ("vegetation", "lesion"):
+            raise ValueError(f"prompt must be 'vegetation' or 'lesion', not {prompt!r}")
         self.predictor = SAM2ImagePredictor(build_sam2(CONFIGS[size], checkpoint, device=device))
         self.n_veg, self.n_les = n_veg_points, n_lesion_points
         self.rng = np.random.default_rng(seed)
+        self.prompt = prompt
+        self._image = None  # the photo currently embedded in the predictor
 
-    def segment(self, rgb: np.ndarray, lesion: np.ndarray | None = None) -> np.ndarray:
+    def _set_image(self, rgb: np.ndarray) -> None:
+        if self._image is not rgb:  # same array object: reuse the embedding
+            self.predictor.set_image(rgb)
+            self._image = rgb
+
+    def segment(self, rgb: np.ndarray, lesion: np.ndarray | None = None, prompt: str | None = None) -> np.ndarray:
         """rgb: HxWx3 uint8. lesion: HxW mask or None. Returns HxW uint8 leaf mask."""
+        if (prompt or self.prompt) == "lesion" and lesion is not None and (lesion > 0).any():
+            return self._segment_from_lesions(rgb, lesion)
         veg = vegetation_mask(rgb, lesion)
         pts = [sample_points(veg, self.n_veg, self.rng)]
         if lesion is not None and lesion.any():
@@ -104,7 +212,7 @@ class SAM2LeafSegmenter:
         pts = np.concatenate(pts)
         if len(pts) == 0:
             return veg
-        self.predictor.set_image(rgb)
+        self._set_image(rgb)
         masks, scores, _ = self.predictor.predict(
             point_coords=pts, point_labels=np.ones(len(pts), np.int32), multimask_output=True
         )
@@ -112,3 +220,16 @@ class SAM2LeafSegmenter:
         if lesion is not None:
             leaf |= (lesion > 0).astype(np.uint8)
         return leaf
+
+    def _segment_from_lesions(self, rgb: np.ndarray, lesion: np.ndarray, n_points: int = 3) -> np.ndarray:
+        self._set_image(rgb)
+        cands, scores = [], []
+        for p in sample_points(lesion, n_points, np.random.default_rng(0), margin=1):
+            m, s, _ = self.predictor.predict(point_coords=p[None], point_labels=np.ones(1, np.int32),
+                                             multimask_output=True)
+            cands.extend(m)
+            scores.extend(s)
+        leaf = choose_leaf_mask(np.asarray(cands), np.asarray(scores), lesion) if cands else None
+        if leaf is None:
+            return anchored_vegetation_mask(rgb, lesion)
+        return (leaf | (lesion > 0)).astype(np.uint8)
